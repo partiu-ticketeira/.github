@@ -1,0 +1,203 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\geometry{a4paper,top=2.5cm,bottom=2.5cm,left=3cm,right=2cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black}
+\setlist[itemize]{noitemsep,topsep=3pt}
+\setlist[enumerate]{itemsep=3pt,topsep=3pt}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0.25em}
+
+\definecolor{codegray}{RGB}{245,245,245}
+\definecolor{codegreen}{RGB}{30,110,70}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codegray},frame=single,
+  rulecolor=\color{black!20},breaklines=true,columns=fullflexible,
+  commentstyle=\color{codegreen},showstringspaces=false}
+
+\newcommand{\imagematerial}[2]{%
+  \begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth,height=#1,keepaspectratio]{#2}
+    \caption{#2}
+  \end{figure}%
+}
+
+\begin{document}
+
+\section*{PARTIU}
+
+O \textbf{PARTIU} \'e uma plataforma distribu\'ida para venda e gerenciamento de ingressos para eventos. O sistema foi projetado para suportar muitos acessos simult\^aneos, evitar venda duplicada e manter a opera\c{c}\~ao dispon\'ivel durante a abertura de lotes concorridos.
+
+\section{Vis\~ao geral}
+
+O cliente acessa a plataforma pelo aplicativo mobile ou pela web. A API REST autentica a requisi\c{c}\~ao e usa o Redis como controle de admiss\~ao \textit{fail fast}: somente uma quantidade segura de pedidos por lote \'e encaminhada para a fila. Trabalhadores processam os pedidos admitidos e confirmam a baixa de estoque por meio de uma atualiza\c{c}\~ao at\^omica no banco relacional.
+
+O pagamento \'e realizado por um \textbf{gateway externo}. O PARTIU n\~ao precisa armazenar dados sens\'iveis do cart\~ao: cria a cobran\c{c}a, acompanha o status e recebe a confirma\c{c}\~ao por webhook. Somente uma confirma\c{c}\~ao v\'alida e idempotente transforma a reserva em ingresso pago.
+
+\section{Arquitetura e padr\~ao MVC}
+
+O sistema adota uma arquitetura cliente-servidor organizada segundo o padr\~ao MVC:
+
+\begin{description}[style=multiline,leftmargin=3.2cm,labelwidth=2.5cm]
+  \item[View] aplicativo mobile e plataforma web. Permite que compradores consultem eventos, reservem ingressos e acompanhem pagamentos; organizadores criem eventos e gerenciem lotes.
+  \item[Controller] API REST distribu\'ida, autentica\c{c}\~ao, regras de neg\'ocio, fila de pedidos e integra\c{c}\~ao com o gateway de pagamento.
+  \item[Model] entidades, servi\c{c}os de persist\^encia, Redis para controle de press\~ao e banco relacional para os dados definitivos.
+\end{description}
+
+Essa separa\c{c}\~ao permite escalar a API e os trabalhadores de forma independente, sem misturar a interface com as regras de neg\'ocio ou a persist\^encia.
+
+\section{Autentica\c{c}\~ao e seguran\c{c}a}
+
+A autentica\c{c}\~ao utiliza OAuth 2.0 com JWT:
+
+\begin{enumerate}
+  \item O usu\'ario entra com e-mail e senha ou por um provedor externo, como Google ou Facebook.
+  \item O servi\c{c}o de autentica\c{c}\~ao emite um JWT com identidade e permiss\~oes.
+  \item A API valida a assinatura e a validade do token localmente, sem consultar o banco em todas as requisi\c{c}\~oes.
+  \item As permiss\~oes s\~ao verificadas antes de opera\c{c}\~oes como criar evento, editar lote ou consultar uma reserva.
+\end{enumerate}
+
+O gateway recebe apenas os dados necess\'arios para criar a cobran\c{c}a. Dados completos de cart\~ao devem permanecer no ambiente do provedor, reduzindo a responsabilidade do PARTIU sobre informa\c{c}\~oes financeiras sens\'iveis.
+
+\section{Entidades do dom\'inio}
+
+\begin{longtable}{>{\bfseries}p{3.2cm}p{10.1cm}}
+\toprule
+Entidade & Responsabilidade \\
+\midrule
+Pessoa & Cadastro de compradores e organizadores, com nome, e-mail, CPF e credenciais protegidas. \\
+Organizador & Associa\c{c}\~ao entre uma pessoa e um evento, incluindo permiss\~oes de gest\~ao. \\
+Evento & Nome, descri\c{c}\~ao, data, local e status do evento. \\
+TipoIngresso & Categoria ou lote, como Pista, VIP, Camarote ou Bistr\^o, com pre\c{c}o, cota total e saldo dispon\'ivel. \\
+Ingresso & Unidade associada \`a pessoa e ao tipo de ingresso, com status da reserva, pagamento e QR Code. \\
+Pagamento & Identificador da cobran\c{c}a no gateway, valor, status, timestamps e chave de idempot\^encia. \\
+Transferencia & Registro de transfer\^encia de titularidade de um ingresso, quando essa opera\c{c}\~ao for permitida. \\
+\bottomrule
+\end{longtable}
+
+\section{Fluxo detalhado de compra}
+
+\subsection{Estados da reserva}
+
+\texttt{reservado} $\rightarrow$ \texttt{aguardando\_pagamento} $\rightarrow$ \texttt{pago}
+
+Uma reserva tamb\'em pode seguir para \texttt{cancelado} por falha no pagamento, cancelamento expl\'icito ou expira\c{c}\~ao do prazo. A devolu\c{c}\~ao do estoque deve ser executada uma \^unica vez, dentro de uma opera\c{c}\~ao transacional ou protegida por idempot\^encia.
+
+\begin{enumerate}
+  \item O comprador escolhe o evento e o lote. A API valida o JWT, o pre\c{c}o vigente e a disponibilidade.
+  \item A inten\c{c}\~ao de compra recebe um identificador idempotente e \'e publicada na fila. O cliente recebe um status de processamento.
+  \item A API solicita ao Redis uma permiss\~ao limitada por lote. Se a capacidade segura estiver esgotada ou o Redis estiver indispon\'ivel, responde rapidamente com \texttt{429} ou \texttt{503}, sem publicar na fila nem acessar o banco.
+  \item Somente pedidos admitidos entram na fila. O worker executa no banco uma atualiza\c{c}\~ao condicional, como:
+\end{enumerate}
+
+\begin{lstlisting}[language=SQL]
+UPDATE tipos_ingresso
+SET qtd_disponivel = qtd_disponivel - 1
+WHERE id = :tipo_ingresso_id AND qtd_disponivel > 0;
+\end{lstlisting}
+
+Se a baixa for aceita, o sistema cria uma reserva com prazo de expira\c{c}\~ao. Se n\~ao houver saldo, a solicita\c{c}\~ao \'e recusada sem alterar o estoque.
+
+O servi\c{c}o de pagamentos cria uma cobran\c{c}a no gateway e associa o identificador externo \`a reserva. O gateway processa o pagamento e envia um webhook assinado quando a cobran\c{c}a muda de estado. A API valida assinatura, valor e identificadores e processa o evento de forma idempotente.
+
+Em caso de pagamento aprovado, a reserva vira \texttt{pago} e o QR Code \'e liberado. Em caso de falha, cancelamento ou expira\c{c}\~ao, a reserva vira \texttt{cancelado} e o saldo retorna ao lote.
+
+\section{Concorr\^encia e alta disponibilidade}
+
+O controle contra \textit{double selling} combina tr\^es mecanismos, com responsabilidades diferentes:
+
+\begin{itemize}
+  \item \textbf{Fila de mensageria:} Kafka absorve picos e distribui pedidos entre trabalhadores.
+  \item \textbf{Admission control fail fast:} Redis limita a quantidade de pedidos do mesmo lote que podem avan\c{c}ar para a fila e o worker.
+  \item \textbf{Atualiza\c{c}\~ao at\^omica:} o banco s\'o reduz a quantidade quando o saldo ainda \'e maior que zero, preservando a consist\^encia ACID.
+\end{itemize}
+
+O Redis n\~ao \'e fonte de estoque e n\~ao substitui a restri\c{c}\~ao do banco. Ele controla press\~ao e aplica \textit{fail fast}; a atualiza\c{c}\~ao condicional \'e a garantia final de consist\^encia. A permiss\~ao deve ter TTL e ser liberada pelo worker em \texttt{finally}, inclusive quando a transa\c{c}\~ao falha. A API e os trabalhadores podem ser replicados atr\'as de um balanceador; Redis, banco e fila devem ser executados com redund\^ancia e monitoramento.
+
+\section{Casos de uso principais}
+
+\begin{itemize}
+  \item \textbf{Criar e gerenciar evento:} o organizador cadastra o evento e configura categorias, lotes, pre\c{c}os e cotas.
+  \item \textbf{Reservar ingresso:} o comprador seleciona uma categoria e obt\'em uma reserva tempor\'aria se houver saldo.
+  \item \textbf{Pagar:} o sistema cria a cobran\c{c}a no gateway e acompanha o resultado sem expor dados de cart\~ao ao PARTIU.
+  \item \textbf{Confirmar pagamento:} o webhook validado altera a reserva para paga e libera o QR Code.
+  \item \textbf{Expirar reserva:} um processo peri\'odico identifica reservas vencidas, cancela a cobran\c{c}a quando aplic\'avel e devolve a unidade ao lote.
+  \item \textbf{Validar acesso:} a equipe do evento consulta ou l\^e o QR Code e verifica se o ingresso est\'a pago e ainda n\~ao foi utilizado.
+\end{itemize}
+
+\section{Diagramas do projeto}
+
+\subsection{Casos de uso}
+\imagematerial{0.78\textheight}{Casos de uso-2026-09-01-161103.png}
+
+Este diagrama apresenta os atores e as funcionalidades externas do sistema: compradores, organizadores, operadores e gateway de pagamento.
+
+\subsection{Modelo de arquitetura}
+\imagematerial{0.82\textheight}{Modelo 1.png}
+
+O modelo mostra a divis\~ao em interface, servi\c{c}os de aplica\c{c}\~ao e persist\^encia. A fronteira entre a aplica\c{c}\~ao e as integra\c{c}\~oes externas evidencia que autentica\c{c}\~ao e pagamentos podem evoluir sem acoplar a interface ao banco.
+
+\subsection{Fluxo distribu\'ido de compra}
+\imagematerial{0.82\textheight}{modelo 2.png}
+
+Este desenho detalha o caminho cr\'itico entre cliente, API, autentica\c{c}\~ao, fila, trabalhador, Redis e banco relacional. O pagamento n\~ao baixa o estoque diretamente: a unidade \'e reservada antes, e s\'o a confirma\c{c}\~ao validada libera o ingresso.
+
+\subsubsection*{Responsabilidade de cada etapa}
+\begin{enumerate}
+  \item \textbf{Cliente -> API:} o aplicativo ou a plataforma web envia evento, lote, quantidade e chave idempotente. A API valida o JWT, os par\^ametros, o pre\c{c}o vigente e a permiss\~ao do comprador.
+  \item \textbf{API -> Auth Provider:} a API valida assinatura, expira\c{c}\~ao e escopos do JWT. Token inv\'alido deve ser rejeitado antes de publicar qualquer pedido.
+  \item \textbf{API -> Redis:} a API solicita uma permiss\~ao de admiss\~ao para o \texttt{tipo\_ingresso\_id}. O Redis mant\'em um contador ou sem\'aforo limitado, com TTL.
+  \item \textbf{Redis -> API:} se houver capacidade, confirma a permiss\~ao; se o limite estiver atingido ou estiver indispon\'ivel, a API responde com \texttt{429} ou \texttt{503}.
+  \item \textbf{API -> Fila:} somente depois da admiss\~ao confirmada a API registra a inten\c{c}\~ao e publica mensagem dur\'avel. Se a publica\c{c}\~ao falhar, a permiss\~ao retorna ao Redis.
+  \item \textbf{Fila -> Worker:} o worker consome pedidos admitidos e confirma a mensagem somente depois de concluir a reserva e criar ou reconhecer a cobran\c{c}a.
+  \item \textbf{Worker -> Banco:} executa a atualiza\c{c}\~ao condicional em uma transa\c{c}\~ao. O Redis n\~ao informa nem substitui o saldo real.
+  \item \textbf{Banco -> Worker:} uma linha atualizada confirma a baixa; nenhuma linha significa lote esgotado. O worker cria a reserva \texttt{RESERVADO} com prazo de expira\c{c}\~ao.
+  \item \textbf{Worker -> Gateway:} cria a cobran\c{c}a usando \texttt{idempotency\_key}, valor calculado no servidor e refer\^encia da reserva.
+  \item \textbf{Gateway -> Checkout:} processa PIX, d\'ebito, cr\'edito ou outro meio suportado. Criar a cobran\c{c}a significa apenas \texttt{PENDENTE}.
+  \item \textbf{Gateway -> Webhook:} envia evento assinado com \texttt{event\_id}, status, valor e identificador externo. Reenvios s\~ao esperados.
+  \item \textbf{Webhook -> API:} valida assinatura, gateway, \texttt{event\_id}, valor, \texttt{gateway\_payment\_id} e v\'inculo com o pagamento.
+  \item \textbf{API -> Banco:} em uma transa\c{c}\~ao, altera pagamento e ingresso apenas se o estado permitir a transi\c{c}\~ao. Evento repetido n\~ao cria ingresso nem devolve estoque novamente.
+  \item \textbf{API -> Worker:} pagamento aprovado libera o QR Code; falha, cancelamento ou expira\c{c}\~ao marca o ingresso como \texttt{CANCELADO} e devolve a unidade uma \^unica vez.
+  \item \textbf{Worker -> Redis:} ap\'os persistir o resultado, inclusive em erro, libera a permiss\~ao em um bloco \texttt{finally}. O TTL protege contra queda do processo.
+  \item \textbf{API -> Cliente:} retorna o estado por consulta, polling ou notifica\c{c}\~ao. O cliente s\'o exibe o QR Code quando o estado persistido for \texttt{PAGO}.
+\end{enumerate}
+
+\subsection{Modelo de dados}
+\imagematerial{0.93\textheight}{PARTIU_DIAGRAM_DB.png}
+
+O diagrama de banco representa as entidades e seus relacionamentos. \texttt{Pessoa} se relaciona com compras e permiss\~oes de organiza\c{c}\~ao; \texttt{Evento} possui tipos de ingresso; \texttt{Ingresso} liga uma pessoa a uma categoria; e \texttt{Pagamento} registra a cobran\c{c}a externa.
+
+\subsubsection*{Regras representadas}
+\begin{itemize}
+  \item Um evento pode ter v\'arios organizadores e v\'arios tipos de ingresso; cada registro de \texttt{Organizador} vincula uma pessoa a um evento e define sua fun\c{c}\~ao.
+  \item Cada ingresso pertence a um tipo de ingresso e a uma pessoa. O \texttt{pagamento\_id} \'e opcional durante a reserva e fica associado quando a cobran\c{c}a \'e criada ou confirmada.
+  \item Um pagamento pertence a uma pessoa e pode quitar v\'arios ingressos da mesma compra. Seus estados previstos s\~ao \texttt{PENDENTE}, \texttt{APROVADO}, \texttt{RECUSADO} e \texttt{ESTORNADO}.
+  \item O ingresso controla \texttt{RESERVADO}, \texttt{PAGO}, \texttt{CANCELADO} e \texttt{UTILIZADO}, al\'em do prazo de expira\c{c}\~ao e do QR Code.
+  \item Uma transfer\^encia registra o ingresso, a pessoa de origem, a pessoa de destino e seu estado (\texttt{PENDENTE}, \texttt{CONCLUIDA} ou \texttt{CANCELADA}).
+\end{itemize}
+
+Os campos \texttt{gateway}, \texttt{gateway\_payment\_id} e \texttt{idempotency\_key} em \texttt{Pagamentos}, junto com a tabela \texttt{WebhooksPagamento}, suportam a integra\c{c}\~ao com o gateway externo. O \texttt{event\_id} \'e \`unico, enquanto \texttt{processed\_at} permite acompanhar a concilia\c{c}\~ao e o reprocessamento seguro.
+
+\section{Pr\'oximas decis\~oes t\'ecnicas}
+
+\begin{itemize}
+  \item Definir o provedor de pagamentos e o formato de assinatura dos webhooks.
+  \item Definir o tempo de reserva, pol\'itica de cancelamento e comportamento para pagamentos tardios.
+  \item Adicionar observabilidade, m\'etricas de fila, alertas de estoque e uma rotina de reconcilia\c{c}\~ao com o gateway.
+\end{itemize}
+
+\end{document}
