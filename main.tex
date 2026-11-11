@@ -83,7 +83,7 @@ O Transactional Outbox garante que o registro de dom\'inio e o evento de integra
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth,height=0.92\textheight,keepaspectratio]{img/partiu-dashboard.png}
+  \includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{img/partiu-dashboard.png}
   \caption{Dashboard Grafana com m\'etricas reais da API e dos componentes distribu\'idos.}
 \end{figure}
 
@@ -307,7 +307,7 @@ Este desenho detalha o caminho cr\'itico entre cliente, API, autentica\c{c}\~ao,
 \subsection{Modelo de dados}
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth,height=0.93\textheight,keepaspectratio]{PARTIU_DIAGRAM_DB.png}
+  \includegraphics[width=\textwidth,height=0.8\textheight,keepaspectratio]{PARTIU_DIAGRAM_DB.png}
   \caption{Modelo de dados do PARTIU.}
 \end{figure}
 
@@ -324,12 +324,5 @@ O diagrama de banco representa as entidades e seus relacionamentos. \texttt{Pess
 
 Os campos \texttt{gateway}, \texttt{gateway\_payment\_id} e \texttt{idempotency\_key} em \texttt{Pagamentos}, junto com a tabela \texttt{WebhooksPagamento}, suportam a integra\c{c}\~ao com o gateway externo. O \texttt{event\_id} \'e \`unico, enquanto \texttt{processed\_at} permite acompanhar a concilia\c{c}\~ao e o reprocessamento seguro.
 
-\section{Pr\'oximas decis\~oes t\'ecnicas}
-
-\begin{itemize}
-  \item Definir o provedor de pagamentos e o formato de assinatura dos webhooks.
-  \item Definir o tempo de reserva, pol\'itica de cancelamento e comportamento para pagamentos tardios.
-  \item Adicionar observabilidade, m\'etricas de fila, alertas de estoque e uma rotina de reconcilia\c{c}\~ao com o gateway.
-\end{itemize}
 
 \end{document}
